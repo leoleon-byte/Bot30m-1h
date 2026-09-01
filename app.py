@@ -8,6 +8,12 @@ import requests
 
 app = Flask(__name__)
 
+# Crear una sesión HTTP con User-Agent de navegador para evitar bloqueos de Yahoo Finance en la nube
+session_yf = requests.Session()
+session_yf.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
+
 @app.route('/')
 def home():
     return "¡El Bot de Trading EUR/USD está activo, operando y conectado a Supabase!"
@@ -49,7 +55,6 @@ def verificar_y_guardar_senal(activo, direccion, rsi):
     rest_url = f"{supabase_url}/rest/v1/historial_senales"
     
     try:
-        # Ventana de tiempo de 1 hora para evitar duplicados seguidos
         ahora_utc = datetime.now(timezone.utc)
         hace_una_hora = (ahora_utc - timedelta(hours=1)).isoformat()
         
@@ -66,7 +71,6 @@ def verificar_y_guardar_senal(activo, direccion, rsi):
                 print("Señal duplicada detectada en Supabase. Omitiendo alerta.")
                 return False
                 
-        # Guardar la nueva señal en la base de datos
         payload = {
             "activo": activo,
             "direccion": direccion,
@@ -113,14 +117,14 @@ def calcular_rsi(precios, periodos=14):
     return rsi
 
 def tarea_analisis():
-    # Pequeña pausa inicial para dar tiempo a que levante el servidor web
     time.sleep(15)
     
     while True:
         try:
             print("Iniciando ciclo de análisis técnico (EUR/USD - Temporalidad 1h)...")
             
-            df = yf.download(tickers="EUR=X", interval="1h", period="5d", progress=False)
+            # Pasamos la sesión con User-Agent para evitar el bloqueo de Yahoo Finance
+            df = yf.download(tickers="EUR=X", interval="1h", period="5d", progress=False, session=session_yf)
             
             if not df.empty and 'Close' in df.columns:
                 precios_cierre = df['Close'].dropna().tolist()
@@ -132,7 +136,6 @@ def tarea_analisis():
                     
                     print(f"Precio Actual: {ultimo_cierre:.5f} | EMA50: {ema_50:.5f} | RSI(14): {rsi_14:.2f}")
                     
-                    # Condición de COMPRA: Precio por encima de EMA50 y RSI sobrevendido (< 30)
                     if ultimo_cierre > ema_50 and rsi_14 < 30:
                         if verificar_y_guardar_senal("EUR/USD", "COMPRA", rsi_14):
                             mensaje = (
@@ -145,7 +148,6 @@ def tarea_analisis():
                             )
                             enviar_alerta_telegram(mensaje)
                         
-                    # Condición de VENTA: Precio por debajo de EMA50 y RSI sobrecomprado (> 70)
                     elif ultimo_cierre < ema_50 and rsi_14 > 70:
                         if verificar_y_guardar_senal("EUR/USD", "VENTA", rsi_14):
                             mensaje = (
@@ -161,15 +163,12 @@ def tarea_analisis():
         except Exception as e:
             print(f"Error en el ciclo de análisis: {e}")
             
-        # Esperar 1 hora exacta antes del siguiente escaneo del mercado
         time.sleep(3600)
 
 if __name__ == '__main__':
-    # Lanzar el bucle de análisis en segundo plano
     hilo = threading.Thread(target=tarea_analisis)
     hilo.daemon = True
     hilo.start()
     
-    # Arrancar el servidor web para Render y UptimeRobot
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
