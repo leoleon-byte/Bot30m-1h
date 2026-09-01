@@ -24,24 +24,52 @@ HEADERS_SUPABASE = {
 # Variable global para el control de Start / Stop del bot
 bot_running = True
 
-# --- CESTA AMPLIADA DE ACTIVOS (Forex, Criptos y Commodities - Cero OTC) ---
+# --- SUPER-CESTA GLOBAL: TODO EL MERCADO POSIBLE (Cero OTC) ---
 ASSETS_LIST = [
-    # Forex - Majors
+    # 1. FOREX - MAJORS Y CROSSES
     "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", 
-    "USDCAD=X", "NZDUSD=X", "USDCHF=X",
-    # Forex - Crosses
-    "EURGBP=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X", 
-    "EURAUD=X", "EURCAD=X", "GBPCAD=X", "AUDNZD=X",
-    "CHFJPY=X", "NZDJPY=X", "CADJPY=X",
-    # Criptomonedas (24/7 Globales)
+    "USDCAD=X", "NZDUSD=X", "USDCHF=X", "EURGBP=X", 
+    "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "EURAUD=X", 
+    "EURCAD=X", "GBPCAD=X", "AUDNZD=X", "CHFJPY=X", 
+    "NZDJPY=X", "CADJPY=X", "USDMXN=X", "USDBRL=X",
+
+    # 2. CRIPTOMONEDAS GLOBALES (24/7)
     "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", 
-    "ADA-USD", "AVAX-USD", "DOGE-USD", "LINK-USD",
-    # Materias Primas / Commodities
-    "GC=X",     # Oro
-    "SI=X",     # Plata
-    "CL=X",     # Petróleo Crudo WTI
+    "ADA-USD", "AVAX-USD", "DOGE-USD", "LINK-USD", 
+    "DOT-USD", "MATIC-USD", "LTC-USD", "UNI-USD",
+
+    # 3. MATERIAS PRIMAS / COMMODITIES
+    "GC=X",     # Oro (Gold)
+    "SI=X",     # Plata (Silver)
+    "CL=X",     # Petróleo Crudo WTI (Crude Oil)
+    "BZ=X",     # Petróleo Brent
     "HG=X",     # Cobre
-    "PL=X"      # Platino
+    "PL=X",     # Platino
+    "PA=X",     # Paladio
+    "NG=X",     # Gas Natural
+
+    # 4. ÍNDICES BURSÁTILES GLOBALES
+    "^GSPC",    # S&P 500 (USA)
+    "^IXIC",    # Nasdaq Composite (USA)
+    "^DJI",     # Dow Jones Industrial (USA)
+    "^FTSE",    # FTSE 100 (Reino Unido)
+    "^N225",    # Nikkei 225 (Japón)
+    "^GDAXI",   # DAX (Alemania)
+    "^FCHI",    # CAC 40 (Francia)
+    "^BVSP",    # Ibovespa (Brasil)
+    "^MXX",     # IPC (México)
+
+    # 5. ACCIONES DE MÁXIMA LIQUIDEZ (MEGA CAPS)
+    "AAPL",     # Apple
+    "MSFT",     # Microsoft
+    "GOOGL",    # Alphabet (Google)
+    "AMZN",     # Amazon
+    "TSLA",     # Tesla
+    "NVDA",     # NVIDIA
+    "META",     # Meta Platforms
+    "NFLX",     # Netflix
+    "AMD",      # Advanced Micro Devices
+    "INTC"      # Intel
 ]
 
 # --- SESIÓN HTTP SIMULADA PARA YAHOO FINANCE ---
@@ -60,7 +88,6 @@ def get_yahoo_data(symbol):
         result = data['chart']['result'][0]
         closes = result['indicators']['quote'][0]['close']
         
-        # Limpiar valores nulos
         closes = [c for c in closes if c is not None]
         return closes
     except Exception as e:
@@ -72,7 +99,7 @@ def calculate_ema(prices, period=50):
     if len(prices) < period:
         return prices[-1] if prices else 0
     multiplier = 2 / (period + 1)
-    ema = sum(prices[:period]) / period  # SMA inicial
+    ema = sum(prices[:period]) / period
     for price in prices[period:]:
         ema = (price - ema) * multiplier + ema
     return ema
@@ -103,7 +130,6 @@ def get_exigency_level(asset):
         if data:
             return data[0].get("exigency_level", 0)
         else:
-            # Si no existe, crearlo en nivel 0
             requests.post(f"{SUPABASE_URL}/rest/v1/config_exigencia", headers=HEADERS_SUPABASE, json={"asset": asset, "exigency_level": 0})
             return 0
     except:
@@ -167,7 +193,7 @@ def already_signaled_this_hour(asset):
 
 # --- MOTOR PRINCIPAL EN SEGUNDO PLANO ---
 def trading_bot_loop():
-    print("Hilo del bot de trading ampliado iniciado...")
+    print("Hilo del bot de trading con cobertura global iniciado...")
     while True:
         global bot_running
         if not bot_running:
@@ -186,7 +212,7 @@ def trading_bot_loop():
 
                 prices = get_yahoo_data(asset)
                 if not prices or len(prices) < 60:
-                    time.sleep(3)
+                    time.sleep(2)
                     continue
 
                 current_price = prices[-1]
@@ -232,16 +258,24 @@ def trading_bot_loop():
                     )
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-                # Pausa escalonada corta para recorrer eficientemente la lista grande
-                time.sleep(10)
+                time.sleep(8)
 
         except Exception as e:
             print(f"Error en ciclo general del bot: {e}")
 
-        time.sleep(30)
+        time.sleep(20)
 
-# Lanzar hilo en segundo plano
+# --- FUNCIÓN DE AVISO DE INICIO ---
+def enviar_aviso_inicio():
+    try:
+        msg = "🚀 **SISTEMA DE TRADING INICIADO**\nCobertura global de mercados activada (Forex, Cripto, Commodities, Índices y Acciones)."
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except Exception as e:
+        print(f"Error enviando aviso de inicio: {e}")
+
+# Lanzar hilo en segundo plano y enviar notificación a Telegram
 threading.Thread(target=trading_bot_loop, daemon=True).start()
+enviar_aviso_inicio()
 
 # --- INTERFAZ WEB CON BOTONES START / STOP ---
 HTML_TEMPLATE = """
@@ -288,4 +322,3 @@ def toggle():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-    
