@@ -10,7 +10,6 @@ app = Flask(__name__)
 
 # --- CONFIGURACIÓN DE CREDENCIALES ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
@@ -23,6 +22,29 @@ HEADERS_SUPABASE = {
 
 # Variable global para el control de Start / Stop del bot
 bot_running = True
+
+# --- AUTODETECCIÓN INTELIGENTE DE CHAT ID ---
+def get_telegram_chat_id():
+    # Si hay uno en las variables de entorno, úsalo; si no, búscalo automáticamente
+    env_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if env_id:
+        return env_id
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if data.get("ok") and data.get("result"):
+            for update in data["result"]:
+                chat = update.get("message", {}).get("chat", {}) or update.get("edited_message", {}).get("chat", {})
+                if chat:
+                    detected_id = str(chat.get("id"))
+                    print(f"¡Chat ID detectado automáticamente: {detected_id} ({chat.get('title', 'Chat Privado')})!")
+                    return detected_id
+    except Exception as e:
+        print(f"Error auto-detectando el chat ID: {e}")
+    
+    return None
 
 # --- SUPER-CESTA GLOBAL: TODO EL MERCADO POSIBLE (Cero OTC) ---
 ASSETS_LIST = [
@@ -146,6 +168,10 @@ def increment_exigency(asset):
 
 # --- VERIFICAR RESULTADOS PENDIENTES ---
 def check_pending_results():
+    chat_id = get_telegram_chat_id()
+    if not chat_id:
+        return
+
     try:
         now = datetime.utcnow()
         res = requests.get(f"{SUPABASE_URL}/rest/v1/historial_senales?result=eq.PENDIENTE", headers=HEADERS_SUPABASE)
@@ -177,7 +203,7 @@ def check_pending_results():
                     increment_exigency(asset)
                 
                 msg = f"📊 **RESULTADO DE OPERACIÓN**\nActivo: {asset}\nDirección: {direction}\nPrecio Entrada: {entry_price}\nPrecio Salida: {current_price}\nResultado: **{result_str}**"
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
     except Exception as e:
         print(f"Error evaluando resultados: {e}")
 
@@ -195,12 +221,16 @@ def already_signaled_this_hour(asset):
 def trading_bot_loop():
     print("Hilo del bot de trading con cobertura global iniciado...")
     
-    # Aviso de inicio garantizado al arrancar el hilo
-    try:
-        msg = "🚀 **SISTEMA DE TRADING INICIADO**\nCobertura global de mercados activada y bot operando correctamente."
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    except Exception as e:
-        print(f"Error enviando aviso de inicio: {e}")
+    # Intentar obtener el chat_id y enviar mensaje de inicio automáticamente
+    chat_id = get_telegram_chat_id()
+    if chat_id:
+        try:
+            msg = "🚀 **SISTEMA DE TRADING INICIADO**\nCobertura global de mercados activada y bot operando correctamente."
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
+        except Exception as e:
+            print(f"Error enviando aviso de inicio: {e}")
+    else:
+        print("Aviso: No se pudo detectar un Chat ID activo. Envía un mensaje o /start en el grupo de Telegram para que el bot lo reconozca.")
 
     while True:
         global bot_running
@@ -210,6 +240,7 @@ def trading_bot_loop():
 
         try:
             check_pending_results()
+            current_chat_id = get_telegram_chat_id()
 
             for asset in ASSETS_LIST:
                 if not bot_running:
@@ -238,7 +269,7 @@ def trading_bot_loop():
                 elif current_price < ema50 and rsi14 > sell_rsi_limit:
                     signal = "PUT"
 
-                if signal:
+                if signal and current_chat_id:
                     now = datetime.utcnow()
                     entry_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
                     expiry_dt = now + timedelta(hours=1)
@@ -264,7 +295,7 @@ def trading_bot_loop():
                         f"⚠️ Exigencia Actual: Nivel {exigency}\n"
                         f"⏰ Expiración: Vela de 1 Hora"
                     )
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": current_chat_id, "text": msg, "parse_mode": "Markdown"})
 
                 time.sleep(8)
 
