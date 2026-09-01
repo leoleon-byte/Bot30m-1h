@@ -5,25 +5,12 @@ from datetime import datetime, timezone, timedelta
 from flask import Flask
 import yfinance as yf
 import requests
-from supabase import create_client, Client
 
 app = Flask(__name__)
 
-# Configuración de Supabase usando variables de entorno
-SUPABASE_URL = os.environ.get('SUPABASE_URL')
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
-
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("Conexión a Supabase inicializada correctamente.")
-    except Exception as e:
-        print(f"Error al conectar con Supabase: {e}")
-
 @app.route('/')
 def home():
-    return "¡El Bot de Señales con Supabase está activo y funcionando en la nube!"
+    return "¡El Bot de Trading EUR/USD está activo, operando y conectado a Supabase!"
 
 def enviar_alerta_telegram(mensaje):
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -40,45 +27,57 @@ def enviar_alerta_telegram(mensaje):
         'parse_mode': 'Markdown'
     }
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Error al enviar mensaje a Telegram: {e}")
 
 def verificar_y_guardar_senal(activo, direccion, rsi):
-    if not supabase:
-        print("Supabase no está disponible, enviando alerta sin validar historial.")
+    supabase_url = os.environ.get('SUPABASE_URL')
+    supabase_key = os.environ.get('SUPABASE_KEY')
+    
+    if not supabase_url or not supabase_key:
+        print("Supabase no configurado, enviando alerta sin validar historial.")
         return True
     
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    
+    rest_url = f"{supabase_url}/rest/v1/historial_senales"
+    
     try:
-        # Obtenemos la hora actual en UTC
+        # Ventana de tiempo de 1 hora para evitar duplicados seguidos
         ahora_utc = datetime.now(timezone.utc)
-        # Definimos una ventana de tiempo (ej. la última hora) para evitar duplicados en el mismo ciclo
         hace_una_hora = (ahora_utc - timedelta(hours=1)).isoformat()
         
-        # Consultamos si ya existe una señal similar reciente en la base de datos
-        response = supabase.table('historial_senales') \
-            .select('*') \
-            .eq('activo', activo) \
-            .eq('direccion', direccion) \
-            .gte('fecha_hora', hace_una_hora) \
-            .execute()
+        params = {
+            "activo": f"eq.{activo}",
+            "direccion": f"eq.{direccion}",
+            "fecha_hora": f"gte.{hace_una_hora}"
+        }
+        response = requests.get(rest_url, headers=headers, params=params, timeout=10)
         
-        # Si la respuesta trae datos, significa que ya avisamos hace poco
-        if response.data and len(response.data) > 0:
-            print("Señal duplicada detectada en Supabase. Omitiendo alerta.")
-            return False
-        
-        # Si no existe, guardamos la nueva señal en Supabase
-        supabase.table('historial_senales').insert({
-            'activo': activo,
-            'direccion': direccion,
-            'rsi': float(rsi)
-        }).execute()
-        
+        if response.status_code == 200:
+            registros = response.json()
+            if registros and len(registros) > 0:
+                print("Señal duplicada detectada en Supabase. Omitiendo alerta.")
+                return False
+                
+        # Guardar la nueva señal en la base de datos
+        payload = {
+            "activo": activo,
+            "direccion": direccion,
+            "rsi": float(rsi)
+        }
+        requests.post(rest_url, headers=headers, json=payload, timeout=10)
         return True
+        
     except Exception as e:
-        print(f"Error interactuando con Supabase: {e}")
-        return True # Ante una falla de BD, priorizamos el envío de la señal
+        print(f"Error interactuando con Supabase REST: {e}")
+        return True
 
 def calcular_ema(precios, periodos=50):
     k = 2 / (periodos + 1)
@@ -114,11 +113,12 @@ def calcular_rsi(precios, periodos=14):
     return rsi
 
 def tarea_analisis():
+    # Pequeña pausa inicial para dar tiempo a que levante el servidor web
     time.sleep(15)
     
     while True:
         try:
-            print("Analizando el mercado (EUR/USD - Temporalidad 1h) con registro en Supabase...")
+            print("Iniciando ciclo de análisis técnico (EUR/USD - Temporalidad 1h)...")
             
             df = yf.download(tickers="EUR=X", interval="1h", period="5d", progress=False)
             
@@ -130,9 +130,9 @@ def tarea_analisis():
                     ema_50 = calcular_ema(precios_cierre, 50)
                     rsi_14 = calcular_rsi(precios_cierre, 14)
                     
-                    print(f"Precio: {ultimo_cierre:.5f} | EMA50: {ema_50:.5f} | RSI: {rsi_14:.2f}")
+                    print(f"Precio Actual: {ultimo_cierre:.5f} | EMA50: {ema_50:.5f} | RSI(14): {rsi_14:.2f}")
                     
-                    # Lógica de señales con validación en Supabase
+                    # Condición de COMPRA: Precio por encima de EMA50 y RSI sobrevendido (< 30)
                     if ultimo_cierre > ema_50 and rsi_14 < 30:
                         if verificar_y_guardar_senal("EUR/USD", "COMPRA", rsi_14):
                             mensaje = (
@@ -145,6 +145,7 @@ def tarea_analisis():
                             )
                             enviar_alerta_telegram(mensaje)
                         
+                    # Condición de VENTA: Precio por debajo de EMA50 y RSI sobrecomprado (> 70)
                     elif ultimo_cierre < ema_50 and rsi_14 > 70:
                         if verificar_y_guardar_senal("EUR/USD", "VENTA", rsi_14):
                             mensaje = (
@@ -160,12 +161,15 @@ def tarea_analisis():
         except Exception as e:
             print(f"Error en el ciclo de análisis: {e}")
             
+        # Esperar 1 hora exacta antes del siguiente escaneo del mercado
         time.sleep(3600)
 
 if __name__ == '__main__':
+    # Lanzar el bucle de análisis en segundo plano
     hilo = threading.Thread(target=tarea_analisis)
     hilo.daemon = True
     hilo.start()
     
+    # Arrancar el servidor web para Render y UptimeRobot
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
