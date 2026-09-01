@@ -194,6 +194,14 @@ def already_signaled_this_hour(asset):
 # --- MOTOR PRINCIPAL EN SEGUNDO PLANO ---
 def trading_bot_loop():
     print("Hilo del bot de trading con cobertura global iniciado...")
+    
+    # Aviso de inicio garantizado al arrancar el hilo
+    try:
+        msg = "🚀 **SISTEMA DE TRADING INICIADO**\nCobertura global de mercados activada y bot operando correctamente."
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except Exception as e:
+        print(f"Error enviando aviso de inicio: {e}")
+
     while True:
         global bot_running
         if not bot_running:
@@ -265,17 +273,8 @@ def trading_bot_loop():
 
         time.sleep(20)
 
-# --- FUNCIÓN DE AVISO DE INICIO ---
-def enviar_aviso_inicio():
-    try:
-        msg = "🚀 **SISTEMA DE TRADING INICIADO**\nCobertura global de mercados activada (Forex, Cripto, Commodities, Índices y Acciones)."
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    except Exception as e:
-        print(f"Error enviando aviso de inicio: {e}")
-
-# Lanzar hilo en segundo plano y enviar notificación a Telegram
+# Lanzar hilo en segundo plano
 threading.Thread(target=trading_bot_loop, daemon=True).start()
-enviar_aviso_inicio()
 
 # --- INTERFAZ WEB CON BOTONES START / STOP ---
 HTML_TEMPLATE = """
